@@ -1,4 +1,4 @@
-# Orange LTE Linux - Fibocom L850 (XMM7360) Setup
+#LTE Linux - Fibocom L850 (XMM7360) Setup
 
 Complete Linux solution for the **Fibocom L850-GL** LTE modem (Intel XMM7360 chipset) with GUI system tray applet.
 
