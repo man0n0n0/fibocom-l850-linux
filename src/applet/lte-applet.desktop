@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=LTE Applet
+Comment=Orange LTE Connection Manager
+Exec=/home/man0n0/.local/bin/lte-applet.py
+Icon=network-cellular
+Terminal=false
+X-GNOME-Autostart-enabled=true
+Categories=Network;
+StartupNotify=false

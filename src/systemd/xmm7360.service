@@ -1,0 +1,30 @@
+[Unit]
+Description=XMM7360 LTE Modem Connection Daemon
+Documentation=https://github.com/xmm7360/xmm7360-pci
+After=network-pre.target
+Before=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xmm7360-daemon-full.py --apn orange
+ExecStartPost=/usr/local/bin/configure-wwan0-post.sh
+ExecStopPost=/usr/local/bin/modem-reset.sh
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log
+
+# Resource limits
+TimeoutStartSec=120s
+TimeoutStopSec=45s
+
+[Install]
+WantedBy=multi-user.target

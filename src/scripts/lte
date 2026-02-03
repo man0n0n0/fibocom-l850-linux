@@ -1,0 +1,242 @@
+#!/bin/bash
+# LTE Modem Toggle Script
+# Usage: lte [on|off|status]
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+SERVICE="xmm7360.service"
+
+show_status() {
+    if systemctl is-active --quiet $SERVICE; then
+        echo -e "${GREEN}✓ LTE Modem is CONNECTED${NC}"
+        
+        # Show connection details
+        if ip addr show wwan0 &>/dev/null; then
+            IP=$(ip -4 addr show wwan0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+            echo -e "  IP: ${GREEN}$IP${NC}"
+            
+            # Test connectivity
+            if ping -c 1 -W 2 8.8.8.8 &>/dev/null; then
+                echo -e "  Status: ${GREEN}Online${NC}"
+            else
+                echo -e "  Status: ${YELLOW}Connected but no internet${NC}"
+            fi
+        fi
+    else
+        echo -e "${RED}✗ LTE Modem is DISCONNECTED${NC}"
+    fi
+}
+
+lte_on() {
+    if systemctl is-active --quiet $SERVICE; then
+        echo -e "${YELLOW}LTE Modem is already connected${NC}"
+        show_status
+        exit 0
+    fi
+    
+    echo -e "${YELLOW}Starting LTE Modem...${NC}"
+    sudo systemctl start $SERVICE
+    
+    # Wait for connection (max 360 seconds)
+    echo -n "Waiting for connection"
+    for i in {1..360}; do
+        sleep 1
+        echo -n "."
+        if ip addr show wwan0 2>/dev/null | grep -q "inet "; then
+            echo ""
+            echo -e "${GREEN}✓ LTE Modem connected!${NC}"
+            show_status
+            exit 0
+        fi
+    done
+    
+    echo ""
+    echo -e "${RED}✗ Connection timeout${NC}"
+    echo "Check logs: sudo journalctl -u xmm7360 -n 50"
+    exit 1
+}
+
+lte_off() {
+    if ! systemctl is-active --quiet $SERVICE; then
+        echo -e "${YELLOW}LTE Modem is already disconnected${NC}"
+        exit 0
+    fi
+    
+    echo -e "${YELLOW}Stopping LTE Modem...${NC}"
+    sudo systemctl stop $SERVICE
+    
+    # Wait for shutdown
+    sleep 2
+    
+    if systemctl is-active --quiet $SERVICE; then
+        echo -e "${RED}✗ Failed to stop LTE Modem${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✓ LTE Modem disconnected${NC}"
+}
+
+lte_suspend() {
+    if ! systemctl is-active --quiet $SERVICE; then
+        echo -e "${YELLOW}LTE Modem is already disconnected${NC}"
+        exit 0
+    fi
+    
+    echo -e "${YELLOW}Suspending LTE (quick mode)...${NC}"
+    sudo ip link set wwan0 down
+    sudo ip route del default dev wwan0 2>/dev/null
+    echo -e "${GREEN}✓ LTE suspended (use 'lte resume' to reconnect quickly)${NC}"
+}
+
+lte_resume() {
+    if ! systemctl is-active --quiet $SERVICE; then
+        echo -e "${RED}Daemon not running. Use 'lte on' instead${NC}"
+        exit 1
+    fi
+    
+    echo -e "${YELLOW}Resuming LTE...${NC}"
+    
+    # Get the current IP from daemon logs
+    IP=$(journalctl -u xmm7360  --no-pager | grep "IP address:" | tail -1 | awk '{print $NF}')
+    
+    if [ -n "$IP" ]; then
+        # Bring interface up
+        sudo ip link set wwan0 up
+        
+        # Flush any old config
+        sudo ip addr flush dev wwan0
+        
+        # Add the IP
+        sudo ip addr add $IP/32 dev wwan0
+        
+        # Remove old default route if exists
+        sudo ip route del default dev wwan0 2>/dev/null || true
+        
+        # Add default route
+        sudo ip route add default dev wwan0 metric 100
+        
+        # Set DNS
+        sudo resolvectl dns wwan0 8.8.8.8 1.1.1.1
+        
+        # Wait a moment
+        sleep 2
+        
+        # Test connectivity
+        if ping -I wwan0 -c 2 -W 3 8.8.8.8 &>/dev/null; then
+            echo -e "${GREEN}✓ LTE resumed successfully - IP: $IP${NC}"
+        else
+            echo -e "${YELLOW}⚠ LTE interface up but connectivity test failed${NC}"
+            echo -e "  Try: ping -I wwan0 8.8.8.8"
+        fi
+    else
+        echo -e "${RED}ERROR: Could not get IP from daemon logs${NC}"
+        echo -e "Use 'lte restart' for a full restart"
+        exit 1
+    fi
+}
+
+show_status() {
+    if systemctl is-active --quiet $SERVICE; then
+        echo -e "${GREEN}✓ LTE Modem is CONNECTED${NC}"
+        
+        # Show connection details
+        if ip addr show wwan0 &>/dev/null && ip addr show wwan0 | grep -q "inet "; then
+            IP=$(ip -4 addr show wwan0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+            echo -e "  IP: ${GREEN}$IP${NC}"
+            
+            # Test connectivity and measure quality
+            echo -n "  Testing connection quality..."
+            PING_OUTPUT=$(ping -I wwan0 -c 3 -W 2 8.8.8.8 2>/dev/null)
+            
+            if echo "$PING_OUTPUT" | grep -q "bytes from"; then
+                # Get average latency
+                LATENCY=$(echo "$PING_OUTPUT" | tail -1 | awk -F '/' '{print $5}' | cut -d. -f1)
+                
+                # Get packet loss
+                LOSS=$(echo "$PING_OUTPUT" | grep "packet loss" | awk '{print $6}' | tr -d '%')
+                
+                echo -ne "\r"
+                
+                if [ -n "$LATENCY" ]; then
+                    # Determine signal quality based on latency and packet loss
+                    if [ "$LATENCY" -lt 50 ] && [ "$LOSS" -eq 0 ]; then
+                        QUALITY="${GREEN}Excellent${NC}"
+                        BARS="█████"
+                    elif [ "$LATENCY" -lt 100 ] && [ "$LOSS" -lt 10 ]; then
+                        QUALITY="${GREEN}Good${NC}"
+                        BARS="████▒"
+                    elif [ "$LATENCY" -lt 150 ] && [ "$LOSS" -lt 20 ]; then
+                        QUALITY="${YELLOW}Fair${NC}"
+                        BARS="███▒▒"
+                    elif [ "$LATENCY" -lt 200 ] && [ "$LOSS" -lt 30 ]; then
+                        QUALITY="${YELLOW}Poor${NC}"
+                        BARS="██▒▒▒"
+                    else
+                        QUALITY="${RED}Very Poor${NC}"
+                        BARS="█▒▒▒▒"
+                    fi
+                    echo -e "  Quality: $QUALITY $BARS"
+                    echo -e "  Latency: ${LATENCY}ms | Packet Loss: ${LOSS}%"
+                else
+                    echo -e "  Status: ${GREEN}Online${NC}"
+                fi
+            else
+                echo -ne "\r"
+                echo -e "  Status: ${RED}No connectivity${NC}"
+            fi
+        else
+            echo -e "  Status: ${YELLOW}Interface down (use 'lte resume')${NC}"
+        fi
+    else
+        echo -e "${RED}✗ LTE Modem is DISCONNECTED${NC}"
+    fi
+}
+
+show_usage() {
+    echo "Usage: lte [on|off|suspend|resume|status|restart]"
+    echo ""
+    echo "Commands:"
+    echo "  on       - Connect LTE modem (slow start: ~5 min after 'off')"
+    echo "  off      - Disconnect LTE modem completely"
+    echo "  suspend  - Disable LTE quickly (keeps daemon running)"
+    echo "  resume   - Re-enable LTE quickly (instant)"
+    echo "  status   - Show connection status"
+    echo "  restart  - Full restart (slow)"
+    echo "  logs     - Show live logs"
+}
+
+case "${1:-status}" in
+    on|start|connect)
+        lte_on
+        ;;
+    off|stop|disconnect)
+        lte_off
+        ;;
+    suspend|pause)
+        lte_suspend
+        ;;
+    resume|unpause)
+        lte_resume
+        ;;
+    status)
+        show_status
+        ;;
+    restart)
+        lte_off
+        sleep 2
+        lte_on
+        ;;
+    logs)
+        echo "Showing live logs (Ctrl+C to exit)..."
+        sudo journalctl -u xmm7360 -f
+        ;;
+    *)
+        show_usage
+        exit 1
+        ;;
+esac

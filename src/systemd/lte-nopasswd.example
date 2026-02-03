@@ -1,0 +1,10 @@
+# Allow lte commands without password
+man0n0 ALL=(ALL) NOPASSWD: /usr/local/bin/lte
+man0n0 ALL=(ALL) NOPASSWD: /usr/bin/systemctl start xmm7360
+man0n0 ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop xmm7360
+man0n0 ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart xmm7360
+man0n0 ALL=(ALL) NOPASSWD: /sbin/ip link set wwan0 *
+man0n0 ALL=(ALL) NOPASSWD: /sbin/ip addr *
+man0n0 ALL=(ALL) NOPASSWD: /sbin/ip route *
+man0n0 ALL=(ALL) NOPASSWD: /usr/bin/resolvectl dns wwan0 *
+man0n0 ALL=(ALL) NOPASSWD: /usr/bin/nmcli radio wifi *
